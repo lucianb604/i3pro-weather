@@ -40,13 +40,13 @@ def font(size, bold=False):
     return ImageFont.load_default()
 
 F_CITY = font(29, True)
-F_DAY = font(20)
-F_TEMP = font(52)
-F_STAT = font(13)
+F_DAY = font(19)
+F_TEMP = font(54)
+F_STAT = font(12)
 F_COND = font(11)
-F_TILE_DAY = font(17)
-F_TILE_TEMP = font(14)
-F_TILE_RAIN = font(10)
+F_TILE_DAY = font(16)
+F_TILE_TEMP = font(13)
+F_TILE_RAIN = font(9)
 
 def condition(code):
     if code == 0: return "Clear"
@@ -63,292 +63,204 @@ def wind_dir(deg):
     dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
     return dirs[int((deg + 22.5) // 45) % 8]
 
-def center_text(draw, box, text, fnt, fill):
+def centered(draw, box, text, fnt, fill):
     x1, y1, x2, y2 = box
     bb = draw.textbbox((0, 0), text, font=fnt)
     tw = bb[2] - bb[0]
     th = bb[3] - bb[1]
-    draw.text(
-        (x1 + (x2-x1-tw)/2, y1 + (y2-y1-th)/2),
-        text,
-        font=fnt,
-        fill=fill
-    )
+    draw.text((x1+(x2-x1-tw)/2, y1+(y2-y1-th)/2),
+              text, font=fnt, fill=fill)
 
 def make_background():
-    base = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     raw = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
-
     px = raw.load()
     for y in range(HEIGHT):
         gy = y / HEIGHT
         for x in range(WIDTH):
             gx = x / WIDTH
-
-            glow = math.exp(
-                -(((gx - 0.56) / 0.40) ** 2 +
-                  ((gy - 0.12) / 0.62) ** 2)
-            )
-            edge = min(1.0, abs(gx - 0.5) * 2.0)
-
-            r = 4 + 8 * glow
-            g = 55 + 112 * glow - 28 * edge + 10 * (1 - gy)
-            b = 125 + 112 * glow - 18 * edge
-
-            px[x, y] = (
-                max(0, min(255, int(r))),
-                max(0, min(255, int(g))),
-                max(0, min(255, int(b))),
+            center = math.exp(-(((gx-.57)/.43)**2 + ((gy-.10)/.55)**2))
+            lower = math.exp(-(((gx-.52)/.70)**2 + ((gy-.78)/.55)**2))
+            edge = min(1, abs(gx-.5)*2)
+            r = 2 + 7*center
+            g = 48 + 110*center + 12*lower - 22*edge
+            b = 118 + 118*center + 15*lower - 12*edge
+            px[x,y] = (
+                int(max(0,min(255,r))),
+                int(max(0,min(255,g))),
+                int(max(0,min(255,b)))
             )
 
-    # Subtle upper cyan bloom
-    bloom = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    img = raw.convert("RGBA")
+
+    bloom = Image.new("RGBA", img.size, (0,0,0,0))
     bd = ImageDraw.Draw(bloom)
-    bd.ellipse((180, -120, 700, 185), fill=(110, 225, 255, 55))
-    bloom = bloom.filter(ImageFilter.GaussianBlur(48))
+    bd.ellipse((220,-145,720,155), fill=(120,230,255,48))
+    bloom = bloom.filter(ImageFilter.GaussianBlur(50))
+    img.alpha_composite(bloom)
 
     mask = Image.new("L", (WIDTH, HEIGHT), 0)
     md = ImageDraw.Draw(mask)
-    md.rounded_rectangle((1, 1, WIDTH-2, HEIGHT-2), radius=28, fill=255)
+    md.rounded_rectangle((1,1,WIDTH-2,HEIGHT-2), radius=28, fill=255)
 
-    base.paste(raw.convert("RGBA"), (0, 0), mask)
-    base.alpha_composite(bloom)
+    rounded = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    rounded.paste(img, (0,0), mask)
 
-    # Thin glossy border
-    bd = ImageDraw.Draw(base)
-    bd.rounded_rectangle(
-        (1, 1, WIDTH-2, HEIGHT-2),
-        radius=28,
-        outline=(220, 245, 255, 60),
-        width=1
-    )
-    return base
+    rd = ImageDraw.Draw(rounded)
+    rd.rounded_rectangle((1,1,WIDTH-2,HEIGHT-2), radius=28,
+                         outline=(220,245,255,55), width=1)
+    return rounded
 
-def shadow_blob(layer, box, blur=10, alpha=80):
-    sh = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(sh)
-    d.ellipse(box, fill=(0, 28, 70, alpha))
-    sh = sh.filter(ImageFilter.GaussianBlur(blur))
-    layer.alpha_composite(sh)
+def ellipse_gradient(size, inner, outer):
+    w,h = size
+    img = Image.new("RGBA", size, (0,0,0,0))
+    px = img.load()
+    cx, cy = w/2, h/2
+    rx, ry = w/2, h/2
+    for y in range(h):
+        for x in range(w):
+            d = min(1.0, math.sqrt(((x-cx)/rx)**2 + ((y-cy)/ry)**2))
+            t = d
+            px[x,y] = tuple(int(inner[i]*(1-t)+outer[i]*t) for i in range(4))
+    return img
 
 def draw_sun(layer, cx, cy, r, large=False):
-    # Glow
-    glow = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    glow = Image.new("RGBA", layer.size, (0,0,0,0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse(
-        (cx-r*1.8, cy-r*1.8, cx+r*1.8, cy+r*1.8),
-        fill=(255, 205, 35, 110 if large else 75)
-    )
-    glow = glow.filter(ImageFilter.GaussianBlur(max(8, int(r*0.50))))
+    gd.ellipse((cx-r*1.9, cy-r*1.9, cx+r*1.9, cy+r*1.9),
+               fill=(255,205,40,105 if large else 70))
+    glow = glow.filter(ImageFilter.GaussianBlur(max(7,int(r*.55))))
     layer.alpha_composite(glow)
 
     d = ImageDraw.Draw(layer)
-
-    # Rays
-    ray_len = 18 if large else 9
-    for angle in range(0, 360, 15 if large else 24):
+    for angle in range(0,360,14 if large else 24):
         a = math.radians(angle)
-        d.line(
-            (
-                cx + math.cos(a)*(r+3),
-                cy + math.sin(a)*(r+3),
-                cx + math.cos(a)*(r+ray_len),
-                cy + math.sin(a)*(r+ray_len),
-            ),
-            fill=(255, 225, 70, 175),
-            width=2 if large else 1
-        )
+        d.line((cx+math.cos(a)*(r+3), cy+math.sin(a)*(r+3),
+                cx+math.cos(a)*(r+(18 if large else 9)),
+                cy+math.sin(a)*(r+(18 if large else 9))),
+               fill=(255,229,80,170), width=2 if large else 1)
 
-    # Sun body
-    d.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(255, 191, 20, 255))
-    d.ellipse(
-        (cx-r*0.73, cy-r*0.83, cx+r*0.50, cy+r*0.30),
-        fill=(255, 236, 95, 185)
-    )
+    grad = ellipse_gradient((r*2+1, r*2+1),
+                            (255,238,95,255),(255,168,10,255))
+    layer.alpha_composite(grad, (int(cx-r), int(cy-r)))
 
 def draw_cloud(layer, cx, cy, scale=1.0, dark=False, large=False):
-    shadow_blob(
-        layer,
-        (
-            cx-55*scale, cy-14*scale,
-            cx+72*scale, cy+40*scale
-        ),
-        blur=10 if large else 5,
-        alpha=95 if large else 60
-    )
+    shadow = Image.new("RGBA", layer.size, (0,0,0,0))
+    sd = ImageDraw.Draw(shadow)
+    sd.ellipse((cx-60*scale, cy-10*scale, cx+76*scale, cy+42*scale),
+               fill=(0,28,70,85 if large else 50))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(10 if large else 5))
+    layer.alpha_composite(shadow)
 
-    cloud = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    cloud = Image.new("RGBA", layer.size, (0,0,0,0))
     d = ImageDraw.Draw(cloud)
 
     if dark:
-        bright = (180, 195, 215, 255)
-        mid = (125, 150, 185, 245)
-        shade = (75, 110, 160, 210)
+        top = (188,204,220,255)
+        mid = (126,151,186,255)
+        low = (76,111,162,230)
     else:
-        bright = (250, 253, 255, 255)
-        mid = (225, 239, 250, 255)
-        shade = (135, 185, 225, 200)
+        top = (255,255,255,255)
+        mid = (229,241,250,255)
+        low = (137,185,224,220)
 
-    # Under-layer/shade
-    d.ellipse(
-        (cx-52*scale, cy+1*scale, cx+66*scale, cy+33*scale),
-        fill=shade
-    )
-
-    # Cloud puffs
-    puffs = [
-        (-44, -2, 25),
-        (-22, -25, 30),
-        (8, -38, 34),
-        (40, -22, 28),
-    ]
-    for ox, oy, rr in puffs:
-        d.ellipse(
-            (
-                cx+(ox-rr)*scale,
-                cy+(oy-rr)*scale,
-                cx+(ox+rr)*scale,
-                cy+(oy+rr)*scale,
-            ),
-            fill=bright
-        )
-
+    # lower body
     d.rounded_rectangle(
-        (
-            cx-48*scale, cy-5*scale,
-            cx+68*scale, cy+30*scale
-        ),
-        radius=max(4, int(14*scale)),
-        fill=mid
+        (cx-52*scale, cy-3*scale, cx+70*scale, cy+31*scale),
+        radius=max(5,int(15*scale)),
+        fill=low
     )
 
-    # Bright top highlights
-    d.ellipse(
-        (
-            cx-25*scale, cy-29*scale,
-            cx+29*scale, cy+11*scale
-        ),
-        fill=(255, 255, 255, 155)
-    )
+    # puffs
+    puffs = [(-40,-4,25),(-18,-28,31),(15,-39,35),(47,-20,29)]
+    for ox,oy,rr in puffs:
+        d.ellipse((cx+(ox-rr)*scale, cy+(oy-rr)*scale,
+                   cx+(ox+rr)*scale, cy+(oy+rr)*scale),
+                  fill=mid)
 
-    cloud = cloud.filter(ImageFilter.GaussianBlur(0.7 if large else 0.25))
+    # highlights
+    d.ellipse((cx-34*scale, cy-28*scale, cx+18*scale, cy+8*scale),
+              fill=top)
+    d.ellipse((cx+2*scale, cy-42*scale, cx+50*scale, cy-3*scale),
+              fill=(255,255,255,220))
+
+    # soft dimensional shading
+    shade = Image.new("RGBA", layer.size, (0,0,0,0))
+    shd = ImageDraw.Draw(shade)
+    shd.ellipse((cx-50*scale, cy+4*scale, cx+68*scale, cy+33*scale),
+                fill=(65,115,180,70 if not dark else 110))
+    shade = shade.filter(ImageFilter.GaussianBlur(6 if large else 3))
+    cloud.alpha_composite(shade)
+
+    cloud = cloud.filter(ImageFilter.GaussianBlur(.6 if large else .25))
     layer.alpha_composite(cloud)
 
 def draw_rain(layer, cx, cy, scale=1.0, heavy=False):
     d = ImageDraw.Draw(layer)
-    drops = (-26, -9, 8, 25) if heavy else (-20, 0, 20)
-    for dx in drops:
-        d.line(
-            (
-                cx+dx*scale,
-                cy+18*scale,
-                cx+(dx-5)*scale,
-                cy+34*scale,
-            ),
-            fill=(95, 205, 255, 235),
-            width=max(1, int(2.4*scale))
-        )
+    xs = (-28,-10,8,26) if heavy else (-20,0,20)
+    for dx in xs:
+        d.line((cx+dx*scale, cy+19*scale,
+                cx+(dx-5)*scale, cy+35*scale),
+               fill=(92,206,255,240), width=max(1,int(2.3*scale)))
 
 def draw_snow(layer, cx, cy, scale=1.0):
     d = ImageDraw.Draw(layer)
-    for dx in (-20, 0, 20):
-        x = cx + dx*scale
-        y = cy + 27*scale
+    for dx in (-20,0,20):
+        x = cx+dx*scale
+        y = cy+27*scale
         r = 3.5*scale
-        d.line((x-r, y, x+r, y), fill=(235, 250, 255, 245), width=1)
-        d.line((x, y-r, x, y+r), fill=(235, 250, 255, 245), width=1)
-        d.line((x-r*.7, y-r*.7, x+r*.7, y+r*.7),
-               fill=(235, 250, 255, 245), width=1)
-        d.line((x-r*.7, y+r*.7, x+r*.7, y-r*.7),
-               fill=(235, 250, 255, 245), width=1)
+        for a in (0,45,90,135):
+            rad = math.radians(a)
+            d.line((x-math.cos(rad)*r, y-math.sin(rad)*r,
+                    x+math.cos(rad)*r, y+math.sin(rad)*r),
+                   fill=(238,251,255,245), width=1)
 
 def draw_lightning(layer, cx, cy, scale=1.0):
     d = ImageDraw.Draw(layer)
-    pts = [
-        (cx+4*scale, cy+12*scale),
-        (cx-6*scale, cy+31*scale),
-        (cx+2*scale, cy+31*scale),
-        (cx-5*scale, cy+49*scale),
-        (cx+15*scale, cy+24*scale),
-        (cx+7*scale, cy+24*scale),
-    ]
-    d.polygon(pts, fill=(115, 225, 255, 255))
+    pts = [(cx+5*scale,cy+12*scale),(cx-6*scale,cy+31*scale),
+           (cx+2*scale,cy+31*scale),(cx-5*scale,cy+50*scale),
+           (cx+16*scale,cy+24*scale),(cx+7*scale,cy+24*scale)]
+    d.polygon(pts, fill=(115,225,255,255))
 
-def draw_weather_icon(layer, code, cx, cy, scale=1.0, large=False):
+def weather_icon(layer, code, cx, cy, scale=1.0, large=False):
     if code == 0:
-        draw_sun(layer, cx, cy, (32 if large else 15)*scale, large=large)
+        draw_sun(layer,cx,cy,(33 if large else 15)*scale,large)
+    elif code in (1,2):
+        draw_sun(layer,cx-(27 if large else 13)*scale,
+                 cy-(18 if large else 10)*scale,
+                 (31 if large else 14)*scale,large)
+        draw_cloud(layer,cx+(13 if large else 7)*scale,
+                   cy+(9 if large else 5)*scale,
+                   (1.22 if large else .63)*scale,large=large)
+    elif code in (3,45,48):
+        draw_cloud(layer,cx,cy,(1.32 if large else .72)*scale,large=large)
+    elif code in (51,53,55,56,57,61,63,65,66,67,80,81,82):
+        draw_cloud(layer,cx,cy-4*scale,(1.25 if large else .69)*scale,large=large)
+        draw_rain(layer,cx,cy+2*scale,scale*(1.18 if large else .80),
+                  heavy=code in (65,67,82))
+    elif code in (71,73,75,77,85,86):
+        draw_cloud(layer,cx,cy-4*scale,(1.25 if large else .69)*scale,large=large)
+        draw_snow(layer,cx,cy+1*scale,scale*(1.18 if large else .80))
+    elif code in (95,96,99):
+        draw_cloud(layer,cx,cy-5*scale,(1.25 if large else .69)*scale,dark=True,large=large)
+        draw_rain(layer,cx,cy+2*scale,scale*(1.14 if large else .77),heavy=True)
+        draw_lightning(layer,cx,cy+1*scale,scale*(1.20 if large else .78))
 
-    elif code in (1, 2):
-        draw_sun(
-            layer,
-            cx-(25 if large else 13)*scale,
-            cy-(18 if large else 10)*scale,
-            (29 if large else 14)*scale,
-            large=large
-        )
-        draw_cloud(
-            layer,
-            cx+(12 if large else 7)*scale,
-            cy+(9 if large else 5)*scale,
-            (1.15 if large else 0.62)*scale,
-            large=large
-        )
+def droplet(draw,x,y):
+    pts=[(x+7,y),(x+2,y+9),(x+2,y+13),(x+4,y+16),
+         (x+7,y+18),(x+10,y+16),(x+12,y+13),(x+12,y+9),(x+7,y)]
+    draw.line(pts,fill=(220,241,255,235),width=2,joint="curve")
 
-    elif code in (3, 45, 48):
-        draw_cloud(
-            layer, cx, cy,
-            (1.25 if large else 0.72)*scale,
-            large=large
-        )
+def wind_icon(draw,x,y):
+    draw.arc((x,y,x+18,y+9),200,350,fill=(220,241,255,235),width=2)
+    draw.arc((x+2,y+5,x+22,y+14),190,342,fill=(220,241,255,235),width=2)
+    draw.arc((x,y+10,x+16,y+17),200,345,fill=(220,241,255,235),width=2)
 
-    elif code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
-        draw_cloud(
-            layer, cx, cy-4*scale,
-            (1.18 if large else 0.68)*scale,
-            large=large
-        )
-        draw_rain(layer, cx, cy+3*scale, scale*(1.15 if large else 0.78),
-                  heavy=code in (65, 67, 82))
-
-    elif code in (71, 73, 75, 77, 85, 86):
-        draw_cloud(
-            layer, cx, cy-4*scale,
-            (1.18 if large else 0.68)*scale,
-            large=large
-        )
-        draw_snow(layer, cx, cy+2*scale, scale*(1.15 if large else 0.8))
-
-    elif code in (95, 96, 99):
-        draw_cloud(
-            layer, cx, cy-5*scale,
-            (1.18 if large else 0.68)*scale,
-            dark=True,
-            large=large
-        )
-        draw_rain(layer, cx, cy+2*scale, scale*(1.1 if large else 0.76), heavy=True)
-        draw_lightning(layer, cx, cy+2*scale, scale*(1.15 if large else 0.75))
-
-    else:
-        draw_cloud(layer, cx, cy, 0.7*scale, large=large)
-
-def draw_drop_icon(draw, x, y):
-    pts = [(x+7, y), (x+2, y+9), (x+2, y+13),
-           (x+4, y+16), (x+7, y+18), (x+10, y+16),
-           (x+12, y+13), (x+12, y+9)]
-    draw.line(pts + [pts[0]], fill=(220, 241, 255, 235), width=2, joint="curve")
-
-def draw_wind_icon(draw, x, y):
-    draw.arc((x, y, x+18, y+9), 200, 350, fill=(220,241,255,235), width=2)
-    draw.arc((x+2, y+5, x+22, y+14), 190, 342, fill=(220,241,255,235), width=2)
-    draw.arc((x, y+10, x+16, y+17), 200, 345, fill=(220,241,255,235), width=2)
-
-def draw_pressure_icon(draw, x, y):
-    draw.ellipse((x, y, x+18, y+18), outline=(220,241,255,235), width=2)
-    draw.line((x+9, y+9, x+14, y+5), fill=(220,241,255,235), width=2)
+def pressure_icon(draw,x,y):
+    draw.ellipse((x,y,x+18,y+18),outline=(220,241,255,235),width=2)
+    draw.line((x+9,y+9,x+14,y+5),fill=(220,241,255,235),width=2)
 
 r = requests.get(URL, timeout=20)
 r.raise_for_status()
-
 data = r.json()
 current = data["current"]
 daily = data["daily"]
@@ -359,149 +271,94 @@ draw = ImageDraw.Draw(img)
 now = datetime.now(ZoneInfo(TZ))
 code = int(current["weather_code"])
 temp = round(current["temperature_2m"])
-humidity = round(current.get("relative_humidity_2m", 0))
-pressure = round(current.get("pressure_msl", 0))
-wind = round(current.get("wind_speed_10m", 0))
-direction = wind_dir(float(current.get("wind_direction_10m", 0)))
+humidity = round(current.get("relative_humidity_2m",0))
+pressure = round(current.get("pressure_msl",0))
+wind = round(current.get("wind_speed_10m",0))
+direction = wind_dir(float(current.get("wind_direction_10m",0)))
 
-# ----- CURRENT CONDITIONS -----
-draw.text((37, 22), "Vancouver", font=F_CITY, fill=(250,253,255,255))
-draw.text((39, 61), now.strftime("%A"), font=F_DAY, fill=(239,248,255,245))
+# Header/current conditions
+draw.text((38,23),"Vancouver",font=F_CITY,fill=(250,253,255,255))
+draw.text((40,61),now.strftime("%A"),font=F_DAY,fill=(239,248,255,245))
 
-# Stats with icons
-y0 = 103
-draw_drop_icon(draw, 39, y0)
-draw.text((66, y0+1), f"{humidity}%", font=F_STAT, fill=(223,241,255,240))
+y0=102
+droplet(draw,40,y0)
+draw.text((67,y0+1),f"{humidity}%",font=F_STAT,fill=(223,241,255,240))
+wind_icon(draw,39,y0+31)
+draw.text((67,y0+32),f"{direction}, {wind} km/h",
+          font=F_STAT,fill=(223,241,255,240))
+pressure_icon(draw,40,y0+64)
+draw.text((67,y0+65),f"{pressure} hPa",
+          font=F_STAT,fill=(223,241,255,240))
 
-draw_wind_icon(draw, 38, y0+31)
-draw.text((66, y0+32), f"{direction}, {wind} km/h",
-          font=F_STAT, fill=(223,241,255,240))
-
-draw_pressure_icon(draw, 39, y0+64)
-draw.text((66, y0+65), f"{pressure} hPa",
-          font=F_STAT, fill=(223,241,255,240))
-
-# Large current icon
-current_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-draw_weather_icon(current_layer, code, 386, 108, scale=1.0, large=True)
-img.alpha_composite(current_layer)
+# Large current artwork
+art = Image.new("RGBA",(WIDTH,HEIGHT),(0,0,0,0))
+weather_icon(art,code,391,111,scale=1.0,large=True)
+img.alpha_composite(art)
 
 draw = ImageDraw.Draw(img)
+temperature=f"{temp:+d}°C"
+bb=draw.textbbox((0,0),temperature,font=F_TEMP)
+draw.text((WIDTH-35-(bb[2]-bb[0]),24),temperature,font=F_TEMP,
+          fill=(250,253,255,250))
 
-# Temperature top right
-temperature = f"{temp:+d}°C"
-bb = draw.textbbox((0,0), temperature, font=F_TEMP)
-draw.text(
-    (WIDTH - 34 - (bb[2]-bb[0]), 24),
-    temperature,
-    font=F_TEMP,
-    fill=(250,253,255,250)
-)
+centered(draw,(280,171,502,193),condition(code),F_COND,(224,242,255,238))
 
-center_text(
-    draw,
-    (270, 169, 505, 194),
-    condition(code),
-    F_COND,
-    (224,242,255,238)
-)
-
-# ----- 7-DAY FORECAST -----
-margin = 22
-gap = 7
-tile_y = 205
-tile_h = 148
-tile_w = (WIDTH - margin*2 - gap*6) // 7
+# Forecast tiles
+margin=23
+gap=8
+tile_y=205
+tile_h=147
+tile_w=(WIDTH-margin*2-gap*6)//7
 
 for i in range(7):
-    x = margin + i*(tile_w + gap)
+    x=margin+i*(tile_w+gap)
 
-    # Soft tile shadow
-    sh = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    sd = ImageDraw.Draw(sh)
-    sd.rounded_rectangle(
-        (x+2, tile_y+4, x+tile_w+2, tile_y+tile_h+4),
-        radius=13,
-        fill=(0, 25, 70, 65)
-    )
-    sh = sh.filter(ImageFilter.GaussianBlur(5))
-    img.alpha_composite(sh)
+    shadow=Image.new("RGBA",(WIDTH,HEIGHT),(0,0,0,0))
+    sd=ImageDraw.Draw(shadow)
+    sd.rounded_rectangle((x+2,tile_y+4,x+tile_w+2,tile_y+tile_h+4),
+                         radius=13,fill=(0,22,60,72))
+    shadow=shadow.filter(ImageFilter.GaussianBlur(5))
+    img.alpha_composite(shadow)
 
-    # Darker glass tile
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        (x, tile_y, x+tile_w, tile_y+tile_h),
-        radius=13,
-        fill=(72, 125, 190, 112 if i == 0 else 92),
-        outline=(210, 238, 255, 105),
-        width=1
-    )
+    draw=ImageDraw.Draw(img)
+    draw.rounded_rectangle((x,tile_y,x+tile_w,tile_y+tile_h),
+                           radius=13,
+                           fill=(48,92,160,118 if i==0 else 100),
+                           outline=(205,235,255,92),
+                           width=1)
 
-    # Top gloss strip
-    gloss = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    gd = ImageDraw.Draw(gloss)
-    gd.rounded_rectangle(
-        (x+2, tile_y+2, x+tile_w-2, tile_y+43),
-        radius=11,
-        fill=(220, 245, 255, 18)
-    )
+    gloss=Image.new("RGBA",(WIDTH,HEIGHT),(0,0,0,0))
+    gd=ImageDraw.Draw(gloss)
+    gd.rounded_rectangle((x+2,tile_y+2,x+tile_w-2,tile_y+40),
+                         radius=11,fill=(230,248,255,18))
     img.alpha_composite(gloss)
 
-    dt = datetime.strptime(daily["time"][i], "%Y-%m-%d")
-    day = dt.strftime("%a").upper()
+    dt=datetime.strptime(daily["time"][i],"%Y-%m-%d")
+    day=dt.strftime("%a").upper()
+    fc=int(daily["weather_code"][i])
 
-    forecast_code = int(daily["weather_code"][i])
+    ti=Image.new("RGBA",(WIDTH,HEIGHT),(0,0,0,0))
+    weather_icon(ti,fc,x+tile_w//2,tile_y+39,scale=.82,large=False)
+    img.alpha_composite(ti)
 
-    tile_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    draw_weather_icon(
-        tile_layer,
-        forecast_code,
-        x + tile_w//2,
-        tile_y + 39,
-        scale=0.80,
-        large=False
-    )
-    img.alpha_composite(tile_layer)
+    draw=ImageDraw.Draw(img)
+    centered(draw,(x,tile_y+73,x+tile_w,tile_y+98),
+             day,F_TILE_DAY,(209,237,255,248))
 
-    draw = ImageDraw.Draw(img)
+    hi=round(daily["temperature_2m_max"][i])
+    lo=round(daily["temperature_2m_min"][i])
+    centered(draw,(x,tile_y+101,x+tile_w,tile_y+124),
+             f"{hi:+d}° / {lo:+d}°",F_TILE_TEMP,(248,252,255,252))
 
-    center_text(
-        draw,
-        (x, tile_y+74, x+tile_w, tile_y+100),
-        day,
-        F_TILE_DAY,
-        (210,238,255,248)
-    )
+    rain=round(daily["precipitation_probability_max"][i] or 0)
+    centered(draw,(x,tile_y+126,x+tile_w,tile_y+142),
+             f"{rain}% rain",F_TILE_RAIN,(190,225,250,220))
 
-    hi = round(daily["temperature_2m_max"][i])
-    lo = round(daily["temperature_2m_min"][i])
-
-    center_text(
-        draw,
-        (x, tile_y+101, x+tile_w, tile_y+126),
-        f"{hi:+d}° / {lo:+d}°",
-        F_TILE_TEMP,
-        (248,252,255,252)
-    )
-
-    rain = round(daily["precipitation_probability_max"][i] or 0)
-
-    center_text(
-        draw,
-        (x, tile_y+127, x+tile_w, tile_y+144),
-        f"{rain}% rain",
-        F_TILE_RAIN,
-        (190,225,250,225)
-    )
-
-img.convert("RGB").save("vancouver.png", "PNG", optimize=True)
-print("Generated polished 770x373 Vancouver weather PNG")
+img.convert("RGB").save("vancouver.png","PNG",optimize=True)
+print("Generated premium 770x373 Vancouver weather PNG")
 '''
 
-path = Path("/mnt/data/generate_weather_polished.py")
+path = Path("/mnt/data/generate_weather_v3.py")
 path.write_text(code, encoding="utf-8")
-
-# syntax check
 py_compile.compile(str(path), doraise=True)
-
-print(f"Created and syntax-checked: {path}")
+print(path)
