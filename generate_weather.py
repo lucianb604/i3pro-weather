@@ -1,7 +1,4 @@
-from pathlib import Path
-import py_compile
-
-code = r'''from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -356,9 +353,3 @@ for i in range(7):
 
 img.convert("RGB").save("vancouver.png","PNG",optimize=True)
 print("Generated premium 770x373 Vancouver weather PNG")
-'''
-
-path = Path("/mnt/data/generate_weather_v3.py")
-path.write_text(code, encoding="utf-8")
-py_compile.compile(str(path), doraise=True)
-print(path)
