@@ -100,17 +100,14 @@ def make_background():
     bloom = bloom.filter(ImageFilter.GaussianBlur(S(50)))
     img.alpha_composite(bloom)
 
-    mask = Image.new("L", (WIDTH, HEIGHT), 0)
-    md = ImageDraw.Draw(mask)
-    md.rounded_rectangle((S(1), S(1), WIDTH-S(2), HEIGHT-S(2)), radius=S(28), fill=255)
-
-    rounded = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    rounded.paste(img, (0,0), mask)
-
-    rd = ImageDraw.Draw(rounded)
-    rd.rounded_rectangle((S(1), S(1), WIDTH-S(2), HEIGHT-S(2)),
-                         radius=S(28), outline=(220,245,255,55), width=S(1))
-    return rounded
+    # Full rectangular image: no rounded outer mask and no transparent corners.
+    rd = ImageDraw.Draw(img)
+    rd.rectangle(
+        (S(1), S(1), WIDTH-S(2), HEIGHT-S(2)),
+        outline=(220,245,255,45),
+        width=S(1)
+    )
+    return img
 
 def ellipse_gradient(size, inner, outer):
     w, h = size
@@ -351,4 +348,4 @@ for i in range(7):
              f"{rain}% rain", F_TILE_RAIN, (190,225,250,220))
 
 img.convert("RGB").save("vancouver.png", "PNG", optimize=True)
-print(f"Generated supersampled Vancouver weather PNG: {WIDTH}x{HEIGHT}")
+print(f"Generated square-corner supersampled Vancouver weather PNG: {WIDTH}x{HEIGHT}")
