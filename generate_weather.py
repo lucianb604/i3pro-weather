@@ -1,167 +1,437 @@
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import math
 
 LAT = 49.2827
 LON = -123.1207
 TZ = "America/Vancouver"
 
-WIDTH = 1200
-HEIGHT = 420
+WIDTH = 770
+HEIGHT = 373
 
 URL = (
     "https://api.open-meteo.com/v1/forecast"
     f"?latitude={LAT}&longitude={LON}"
-    "&current=temperature_2m,weather_code"
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+    "&current=temperature_2m,relative_humidity_2m,weather_code,"
+    "pressure_msl,wind_speed_10m,wind_direction_10m"
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+    "precipitation_probability_max"
     "&timezone=America%2FVancouver"
     "&forecast_days=7"
 )
 
 def font(size, bold=False):
-    paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    ]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except Exception:
-            pass
-    return ImageFont.load_default()
+    path = (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    )
+    return ImageFont.truetype(path, size)
 
-F_TITLE = font(34, True)
-F_SUB = font(19)
-F_BIG = font(48, True)
-F_DAY = font(21, True)
-F_DATE = font(16)
-F_SMALL = font(16)
+F_CITY = font(28, True)
+F_DAY = font(20)
+F_TEMP = font(50)
+F_STAT = font(13)
+F_TILE_DAY = font(16)
+F_TILE_TEMP = font(13)
+F_SMALL = font(10)
 
 def condition(code):
-    if code == 0: return "Clear"
-    if code in (1,2): return "Partly cloudy"
-    if code == 3: return "Cloudy"
-    if code in (45,48): return "Fog"
-    if code in (51,53,55,56,57): return "Drizzle"
-    if code in (61,63,65,66,67,80,81,82): return "Rain"
-    if code in (71,73,75,77,85,86): return "Snow"
-    if code in (95,96,99): return "Storm"
+    if code == 0:
+        return "Clear"
+    if code in (1, 2):
+        return "Partly Cloudy"
+    if code == 3:
+        return "Cloudy"
+    if code in (45, 48):
+        return "Fog"
+    if code in (51, 53, 55, 56, 57):
+        return "Drizzle"
+    if code in (61, 63, 65, 66, 67, 80, 81, 82):
+        return "Rain"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "Snow"
+    if code in (95, 96, 99):
+        return "Storm"
     return "Weather"
 
-def sun(draw, cx, cy, r=24):
-    draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(245,190,70))
-    for dx,dy in [(0,-42),(0,42),(-42,0),(42,0),(-30,-30),(30,-30),(-30,30),(30,30)]:
-        draw.line(
-            (cx+dx*.7, cy+dy*.7, cx+dx, cy+dy),
-            fill=(245,190,70), width=4
+def wind_dir(deg):
+    names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    return names[int((deg + 22.5) // 45) % 8]
+
+def centered(draw, box, text, fnt, colour):
+    x1, y1, x2, y2 = box
+    b = draw.textbbox((0, 0), text, font=fnt)
+    w = b[2] - b[0]
+    h = b[3] - b[1]
+    draw.text(
+        (x1 + (x2-x1-w)/2, y1 + (y2-y1-h)/2),
+        text,
+        font=fnt,
+        fill=colour
+    )
+
+def make_background():
+    img = Image.new("RGB", (WIDTH, HEIGHT))
+    p = img.load()
+
+    for y in range(HEIGHT):
+        for x in range(WIDTH):
+            gx = x / WIDTH
+            gy = y / HEIGHT
+
+            glow = math.exp(
+                -(((gx - .55) / .42) ** 2 +
+                  ((gy - .12) / .65) ** 2)
+            )
+
+            edge = abs(gx - .5) * 2
+
+            p[x, y] = (
+                int(5 + 10 * glow),
+                int(55 + 115 * glow - edge * 18),
+                int(130 + 100 * glow - edge * 15)
+            )
+
+    return img.convert("RGBA")
+
+def sun(layer, cx, cy, r):
+    glow = Image.new("RGBA", layer.size)
+    gd = ImageDraw.Draw(glow)
+
+    gd.ellipse(
+        (cx-r*1.7, cy-r*1.7,
+         cx+r*1.7, cy+r*1.7),
+        fill=(255, 210, 35, 100)
+    )
+
+    glow = glow.filter(ImageFilter.GaussianBlur(12))
+    layer.alpha_composite(glow)
+
+    d = ImageDraw.Draw(layer)
+
+    for angle in range(0, 360, 20):
+        a = math.radians(angle)
+
+        d.line(
+            (
+                cx + math.cos(a)*(r+3),
+                cy + math.sin(a)*(r+3),
+                cx + math.cos(a)*(r+14),
+                cy + math.sin(a)*(r+14)
+            ),
+            fill=(255, 225, 60, 180),
+            width=2
         )
 
-def cloud(draw, cx, cy, scale=1, fill=(225,232,240)):
-    for box in [
-        (cx-40*scale,cy-5*scale,cx+35*scale,cy+25*scale),
-        (cx-28*scale,cy-25*scale,cx+8*scale,cy+16*scale),
-        (cx-2*scale,cy-34*scale,cx+38*scale,cy+14*scale),
-    ]:
-        draw.ellipse(box, fill=fill)
+    d.ellipse(
+        (cx-r, cy-r, cx+r, cy+r),
+        fill=(255, 200, 25, 255)
+    )
 
-def icon(draw, code, cx, cy):
+def cloud(layer, cx, cy, scale=.8, dark=False):
+    d = ImageDraw.Draw(layer)
+
+    c = (
+        (185, 198, 215, 250)
+        if dark else
+        (248, 251, 255, 250)
+    )
+
+    shapes = [
+        (-40, -5, 40, 22),
+        (-28, -23, 16, 20),
+        (-4, -34, 43, 20),
+        (18, -20, 59, 22)
+    ]
+
+    for x1, y1, x2, y2 in shapes:
+        d.ellipse(
+            (
+                cx+x1*scale,
+                cy+y1*scale,
+                cx+x2*scale,
+                cy+y2*scale
+            ),
+            fill=c
+        )
+
+def weather_icon(layer, code, cx, cy, scale=1):
     if code == 0:
-        sun(draw,cx,cy)
-    elif code in (1,2):
-        sun(draw,cx-16,cy-12,18)
-        cloud(draw,cx+6,cy+8,.85)
-    elif code in (3,45,48):
-        cloud(draw,cx,cy,1,(205,215,228))
-    elif code in (51,53,55,56,57,61,63,65,66,67,80,81,82):
-        cloud(draw,cx,cy-8,1,(205,215,228))
-        for x in (cx-22,cx,cx+22):
-            draw.line((x,cy+26,x-5,cy+44), fill=(90,165,230), width=4)
-    elif code in (71,73,75,77,85,86):
-        cloud(draw,cx,cy-8,1,(215,225,235))
-        for x in (cx-22,cx,cx+22):
-            draw.ellipse((x-3,cy+30,x+3,cy+36), fill=(245,248,252))
-    elif code in (95,96,99):
-        cloud(draw,cx,cy-10,1,(190,200,216))
-        draw.polygon(
-            [(cx+2,cy+12),(cx-10,cy+36),(cx+2,cy+36),
-             (cx-5,cy+58),(cx+18,cy+28),(cx+7,cy+28)],
-            fill=(247,195,70)
-        )
-    else:
-        cloud(draw,cx,cy)
+        sun(layer, cx, cy, 20*scale)
 
-def centered(draw, box, text, fnt, fill):
-    x1,y1,x2,y2 = box
-    bb = draw.textbbox((0,0), text, font=fnt)
-    tw, th = bb[2]-bb[0], bb[3]-bb[1]
-    draw.text((x1+(x2-x1-tw)/2, y1+(y2-y1-th)/2), text, font=fnt, fill=fill)
+    elif code in (1, 2):
+        sun(layer, cx-15*scale, cy-12*scale, 19*scale)
+        cloud(layer, cx+7*scale, cy+6*scale, .8*scale)
+
+    elif code in (3, 45, 48):
+        cloud(layer, cx, cy, .9*scale)
+
+    elif code in (51,53,55,56,57,61,63,65,66,67,80,81,82):
+        cloud(layer, cx, cy-4, .85*scale)
+        d = ImageDraw.Draw(layer)
+
+        for dx in (-15, 0, 15):
+            d.line(
+                (cx+dx, cy+18, cx+dx-4, cy+30),
+                fill=(120, 210, 255, 255),
+                width=2
+            )
+
+    elif code in (71,73,75,77,85,86):
+        cloud(layer, cx, cy-4, .85*scale)
+
+        d = ImageDraw.Draw(layer)
+
+        for dx in (-15, 0, 15):
+            d.ellipse(
+                (cx+dx-2, cy+20,
+                 cx+dx+2, cy+24),
+                fill="white"
+            )
+
+    else:
+        cloud(layer, cx, cy-5, .85*scale, True)
+
+        d = ImageDraw.Draw(layer)
+
+        d.polygon(
+            [
+                (cx+3, cy+15),
+                (cx-5, cy+31),
+                (cx+2, cy+31),
+                (cx-5, cy+46),
+                (cx+12, cy+25),
+                (cx+5, cy+25)
+            ],
+            fill=(120, 220, 255, 255)
+        )
 
 r = requests.get(URL, timeout=20)
 r.raise_for_status()
-data = r.json()
-daily = data["daily"]
-current = data["current"]
 
-img = Image.new("RGB", (WIDTH, HEIGHT), (18,24,34))
+data = r.json()
+
+current = data["current"]
+daily = data["daily"]
+
+img = make_background()
 draw = ImageDraw.Draw(img)
 
-for y in range(HEIGHT):
-    t = y/(HEIGHT-1)
-    c = (int(19+18*t), int(29+18*t), int(43+28*t))
-    draw.line((0,y,WIDTH,y), fill=c)
+now = datetime.now(ZoneInfo(TZ))
 
-# Current panel
-draw.rounded_rectangle((24,24,286,396), radius=26,
-                       fill=(28,38,52), outline=(64,82,104), width=2)
-draw.text((46,42), "Vancouver", font=F_TITLE, fill=(245,248,252))
-updated = datetime.now(ZoneInfo(TZ)).strftime("Updated %a %I:%M %p")
-draw.text((46,82), updated, font=F_SUB, fill=(178,191,205))
+code = int(current["weather_code"])
+temp = round(current["temperature_2m"])
+humidity = round(current["relative_humidity_2m"])
+pressure = round(current["pressure_msl"])
+wind = round(current["wind_speed_10m"])
+direction = wind_dir(current["wind_direction_10m"])
 
-cc = int(current["weather_code"])
-ct = round(current["temperature_2m"])
-icon(draw, cc, 156, 170)
-centered(draw,(46,205,266,272), f"{ct}°C", F_BIG, (248,250,252))
-centered(draw,(46,270,266,300), condition(cc), F_SUB, (196,208,220))
+# ---------------------------
+# CURRENT WEATHER - TOP
+# ---------------------------
 
-hi0 = round(daily["temperature_2m_max"][0])
-lo0 = round(daily["temperature_2m_min"][0])
-pop0 = round(daily["precipitation_probability_max"][0])
-draw.text((46,324), f"Today: {hi0}° / {lo0}°", font=F_SUB, fill=(244,247,251))
-draw.text((46,352), f"Precipitation: {pop0}%", font=F_SUB, fill=(116,188,245))
+draw.text(
+    (38, 22),
+    "Vancouver",
+    font=F_CITY,
+    fill="white"
+)
 
-# 7-day cards
-left = 304
-gap = 12
-right = 24
-card_w = (WIDTH-left-right-gap*6)//7
+draw.text(
+    (40, 62),
+    now.strftime("%A"),
+    font=F_DAY,
+    fill=(240, 248, 255)
+)
+
+draw.text(
+    (40, 106),
+    f"Humidity  {humidity}%",
+    font=F_STAT,
+    fill=(220, 240, 255)
+)
+
+draw.text(
+    (40, 132),
+    f"Wind  {direction}, {wind} km/h",
+    font=F_STAT,
+    fill=(220, 240, 255)
+)
+
+draw.text(
+    (40, 158),
+    f"Pressure  {pressure} hPa",
+    font=F_STAT,
+    fill=(220, 240, 255)
+)
+
+# Large current icon
+layer = Image.new(
+    "RGBA",
+    (WIDTH, HEIGHT),
+    (0,0,0,0)
+)
+
+weather_icon(
+    layer,
+    code,
+    390,
+    105,
+    2.25
+)
+
+img.alpha_composite(layer)
+
+draw = ImageDraw.Draw(img)
+
+# Current temperature
+temperature = f"{temp:+d}°C"
+
+bbox = draw.textbbox(
+    (0,0),
+    temperature,
+    font=F_TEMP
+)
+
+draw.text(
+    (
+        WIDTH - 35 - (bbox[2]-bbox[0]),
+        25
+    ),
+    temperature,
+    font=F_TEMP,
+    fill="white"
+)
+
+centered(
+    draw,
+    (280, 170, 500, 195),
+    condition(code),
+    F_SMALL,
+    (225, 243, 255)
+)
+
+# ---------------------------
+# 7 DAY FORECAST
+# ---------------------------
+
+margin = 23
+gap = 7
+
+tile_y = 205
+tile_h = 148
+
+tile_w = (
+    WIDTH -
+    margin*2 -
+    gap*6
+) // 7
 
 for i in range(7):
-    x = left + i*(card_w+gap)
-    y = 24
-    draw.rounded_rectangle((x,y,x+card_w,396), radius=22,
-                           fill=(31,41,55), outline=(67,83,102), width=2)
 
-    dt = datetime.strptime(daily["time"][i], "%Y-%m-%d")
-    day = "Today" if i == 0 else dt.strftime("%a")
-    date = dt.strftime("%b %d")
+    x = margin + i*(tile_w+gap)
 
-    centered(draw,(x,y+18,x+card_w,y+48), day, F_DAY, (248,250,252))
-    centered(draw,(x,y+48,x+card_w,y+72), date, F_DATE, (164,180,196))
+    # Glass tile
+    draw.rounded_rectangle(
+        (
+            x,
+            tile_y,
+            x+tile_w,
+            tile_y+tile_h
+        ),
+        radius=12,
+        fill=(120, 175, 230, 75),
+        outline=(210, 235, 255, 110),
+        width=1
+    )
 
-    code = int(daily["weather_code"][i])
-    icon(draw, code, x+card_w//2, y+125)
+    dt = datetime.strptime(
+        daily["time"][i],
+        "%Y-%m-%d"
+    )
 
-    hi = round(daily["temperature_2m_max"][i])
-    lo = round(daily["temperature_2m_min"][i])
-    centered(draw,(x+6,y+168,x+card_w-6,y+198),
-             f"{hi}° / {lo}°", F_DAY, (248,250,252))
-    centered(draw,(x+4,y+208,x+card_w-4,y+238),
-             condition(code), F_SMALL, (196,207,220))
+    day = dt.strftime("%a").upper()
 
-    pop = round(daily["precipitation_probability_max"][i])
-    centered(draw,(x+4,y+334,x+card_w-4,y+360),
-             f"Rain {pop}%", F_SMALL, (116,188,245))
+    forecast_code = int(
+        daily["weather_code"][i]
+    )
 
-img.save("vancouver.png", "PNG", optimize=True)
-print("Generated vancouver.png")
+    layer = Image.new(
+        "RGBA",
+        (WIDTH, HEIGHT),
+        (0,0,0,0)
+    )
+
+    weather_icon(
+        layer,
+        forecast_code,
+        x + tile_w//2,
+        tile_y + 39,
+        .75
+    )
+
+    img.alpha_composite(layer)
+
+    draw = ImageDraw.Draw(img)
+
+    centered(
+        draw,
+        (
+            x,
+            tile_y+73,
+            x+tile_w,
+            tile_y+99
+        ),
+        day,
+        F_TILE_DAY,
+        (205,235,255)
+    )
+
+    high = round(
+        daily["temperature_2m_max"][i]
+    )
+
+    low = round(
+        daily["temperature_2m_min"][i]
+    )
+
+    centered(
+        draw,
+        (
+            x,
+            tile_y+101,
+            x+tile_w,
+            tile_y+125
+        ),
+        f"{high:+d}° / {low:+d}°",
+        F_TILE_TEMP,
+        "white"
+    )
+
+    rain = round(
+        daily["precipitation_probability_max"][i] or 0
+    )
+
+    centered(
+        draw,
+        (
+            x,
+            tile_y+126,
+            x+tile_w,
+            tile_y+143
+        ),
+        f"{rain}% rain",
+        F_SMALL,
+        (195,225,245)
+    )
+
+img.convert("RGB").save(
+    "vancouver.png",
+    "PNG",
+    optimize=True
+)
+
+print("Generated 770x373 Vancouver weather PNG")
